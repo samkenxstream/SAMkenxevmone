@@ -20,16 +20,44 @@ uint8_t from_json<uint8_t>(const json::json& j)
     return static_cast<uint8_t>(ret);
 }
 
+template <typename T>
+static std::optional<T> integer_from_json(const json::json& j)
+{
+    if (j.is_number_integer())
+        return j.get<T>();
+
+    if (!j.is_string())
+        return {};
+
+    const auto s = j.get<std::string>();
+    size_t num_processed = 0;
+    T v = 0;
+    if constexpr (std::is_same_v<T, uint64_t>)
+        v = std::stoull(s, &num_processed, 0);
+    else
+        v = std::stoll(s, &num_processed, 0);
+
+    if (num_processed == 0 || num_processed != s.size())
+        return {};
+    return v;
+}
+
 template <>
 int64_t from_json<int64_t>(const json::json& j)
 {
-    return static_cast<int64_t>(std::stoll(j.get<std::string>(), nullptr, 16));
+    const auto v = integer_from_json<int64_t>(j);
+    if (!v.has_value())
+        throw std::invalid_argument("from_json<int64_t>: must be integer or string of integer");
+    return *v;
 }
 
 template <>
 uint64_t from_json<uint64_t>(const json::json& j)
 {
-    return static_cast<uint64_t>(std::stoull(j.get<std::string>(), nullptr, 16));
+    const auto v = integer_from_json<uint64_t>(j);
+    if (!v.has_value())
+        throw std::invalid_argument("from_json<uint64_t>: must be integer or string of integer");
+    return *v;
 }
 
 template <>
@@ -47,7 +75,12 @@ address from_json<address>(const json::json& j)
 template <>
 hash256 from_json<hash256>(const json::json& j)
 {
-    return evmc::from_hex<hash256>(j.get<std::string>()).value();
+    // Special case to handle "0". Required by exec-spec-tests.
+    // TODO: Get rid of it.
+    if (j.is_string() && (j == "0" || j == "0x0"))
+        return 0x00_bytes32;
+    else
+        return evmc::from_hex<hash256>(j.get<std::string>()).value();
 }
 
 template <>
@@ -78,32 +111,32 @@ inline uint64_t calculate_current_base_fee_eip1559(
     uint64_t parent_gas_used, uint64_t parent_gas_limit, uint64_t parent_base_fee)
 {
     // TODO: Make sure that 64-bit precision is good enough.
-    static const auto BASE_FEE_MAX_CHANGE_DENOMINATOR = 8;
-    static const auto ELASTICITY_MULTIPLIER = 2;
+    static constexpr auto BASE_FEE_MAX_CHANGE_DENOMINATOR = 8;
+    static constexpr auto ELASTICITY_MULTIPLIER = 2;
 
     uint64_t base_fee = 0;
 
-    uint64_t parent_gas_target = parent_gas_limit / ELASTICITY_MULTIPLIER;
+    const auto parent_gas_target = parent_gas_limit / ELASTICITY_MULTIPLIER;
 
     if (parent_gas_used == parent_gas_target)
         base_fee = parent_base_fee;
     else if (parent_gas_used > parent_gas_target)
     {
-        uint64_t gas_used_delta = parent_gas_used - parent_gas_target;
-        uint64_t formula =
+        const auto gas_used_delta = parent_gas_used - parent_gas_target;
+        const auto formula =
             parent_base_fee * gas_used_delta / parent_gas_target / BASE_FEE_MAX_CHANGE_DENOMINATOR;
-        uint64_t base_fee_per_gas_delta = formula > 1 ? formula : 1;
+        const auto base_fee_per_gas_delta = formula > 1 ? formula : 1;
         base_fee = parent_base_fee + base_fee_per_gas_delta;
     }
     else
     {
-        uint64_t gas_used_delta = parent_gas_target - parent_gas_used;
+        const auto gas_used_delta = parent_gas_target - parent_gas_used;
 
-        auto base_fee_per_gas_delta_u128 = intx::uint128(parent_base_fee, 0) *
-                                           intx::uint128(gas_used_delta, 0) / parent_gas_target /
-                                           BASE_FEE_MAX_CHANGE_DENOMINATOR;
+        const auto base_fee_per_gas_delta_u128 =
+            intx::uint128(parent_base_fee, 0) * intx::uint128(gas_used_delta, 0) /
+            parent_gas_target / BASE_FEE_MAX_CHANGE_DENOMINATOR;
 
-        uint64_t base_fee_per_gas_delta = base_fee_per_gas_delta_u128[0];
+        const auto base_fee_per_gas_delta = base_fee_per_gas_delta_u128[0];
         if (parent_base_fee > base_fee_per_gas_delta)
             base_fee = parent_base_fee - base_fee_per_gas_delta;
         else
@@ -120,11 +153,11 @@ state::BlockInfo from_json<state::BlockInfo>(const json::json& j)
     const auto current_difficulty_it = j.find("currentDifficulty");
     const auto parent_difficulty_it = j.find("parentDifficulty");
     if (prev_randao_it != j.end())
-        difficulty = from_json<evmc::bytes32>(*prev_randao_it);
+        difficulty = from_json<bytes32>(*prev_randao_it);
     else if (current_difficulty_it != j.end())
-        difficulty = from_json<evmc::bytes32>(*current_difficulty_it);
+        difficulty = from_json<bytes32>(*current_difficulty_it);
     else if (parent_difficulty_it != j.end())
-        difficulty = from_json<evmc::bytes32>(*parent_difficulty_it);
+        difficulty = from_json<bytes32>(*parent_difficulty_it);
 
     uint64_t base_fee = 0;
     if (j.contains("currentBaseFee"))
@@ -151,10 +184,14 @@ state::State from_json<state::State>(const json::json& j)
                 .balance = from_json<intx::uint256>(j_acc.at("balance")),
                 .code = from_json<bytes>(j_acc.at("code"))});
 
-        for (const auto& [j_key, j_value] : j_acc.at("storage").items())
+        if (const auto storage_it = j_acc.find("storage"); storage_it != j_acc.end())
         {
-            const auto value = from_json<bytes32>(j_value);
-            acc.storage.insert({from_json<bytes32>(j_key), {.current = value, .original = value}});
+            for (const auto& [j_key, j_value] : storage_it->items())
+            {
+                const auto value = from_json<bytes32>(j_value);
+                acc.storage.insert(
+                    {from_json<bytes32>(j_key), {.current = value, .original = value}});
+            }
         }
     }
     return o;
@@ -200,8 +237,8 @@ static void from_json_tx_common(const json::json& j, state::Transaction& o)
 {
     o.sender = from_json<evmc::address>(j.at("sender"));
 
-    if (const auto& to = j.at("to"); !to.get<std::string>().empty())
-        o.to = from_json<evmc::address>(to);
+    if (const auto to_it = j.find("to"); to_it != j.end() && !to_it->get<std::string>().empty())
+        o.to = from_json<evmc::address>(*to_it);
 
     if (const auto gas_price_it = j.find("gasPrice"); gas_price_it != j.end())
     {

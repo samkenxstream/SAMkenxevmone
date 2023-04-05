@@ -3,7 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # The internal evmone unit tests. The generic EVM ones are also built in.
-add_executable(evmone-unittests
+add_executable(evmone-unittests)
+target_sources(
+    evmone-unittests PRIVATE
     analysis_test.cpp
     bytecode_test.cpp
     eof_test.cpp
@@ -19,6 +21,8 @@ add_executable(evmone-unittests
     evm_eip3855_push0_test.cpp
     evm_eip3860_initcode_test.cpp
     evm_eof_test.cpp
+    evm_eof_function_test.cpp
+    evm_eof_rjump_test.cpp
     evm_memory_test.cpp
     evm_state_test.cpp
     evm_storage_test.cpp
@@ -32,11 +36,11 @@ add_executable(evmone-unittests
     state_mpt_test.cpp
     state_new_account_address_test.cpp
     state_rlp_test.cpp
+    statetest_loader_block_info_test.cpp
     statetest_loader_test.cpp
     statetest_loader_tx_test.cpp
     statetest_logs_hash_test.cpp
     tracing_test.cpp
-    utils_test.cpp
 )
 target_link_libraries(evmone-unittests PRIVATE evmone evmone::state evmone::statetestutils testutils evmc::instructions GTest::gtest GTest::gtest_main)
 target_include_directories(evmone-unittests PRIVATE ${evmone_private_include_dir})

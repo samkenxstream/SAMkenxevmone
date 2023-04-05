@@ -5,6 +5,7 @@
 #include "host.hpp"
 #include "precompiles.hpp"
 #include "rlp.hpp"
+#include <evmone/eof.hpp>
 
 namespace evmone::state
 {
@@ -184,8 +185,8 @@ evmc::Result Host::create(const evmc_message& msg) noexcept
 
     // Clear the new account storage, but keep the access status (from tx access list).
     // This is only needed for tests and cannot happen in real networks.
-    for (auto& [_, v] : new_acc.storage)
-        [[unlikely]] v = StorageValue{.access_status = v.access_status};
+    for (auto& [_, v] : new_acc.storage) [[unlikely]]
+        v = StorageValue{.access_status = v.access_status};
 
     auto& sender_acc = m_state.get(msg.sender);  // TODO: Duplicated account lookup.
     const auto value = intx::be::load<intx::uint256>(msg.value);
@@ -194,8 +195,15 @@ evmc::Result Host::create(const evmc_message& msg) noexcept
     new_acc.balance += value;  // The new account may be prefunded.
 
     auto create_msg = msg;
+    const bytes_view initcode{msg.input_data, msg.input_size};
     create_msg.input_data = nullptr;
     create_msg.input_size = 0;
+
+    if (m_rev >= EVMC_CANCUN && (is_eof_container(initcode) || is_eof_container(sender_acc.code)))
+    {
+        if (validate_eof(m_rev, initcode) != EOFValidationError::success)
+            return evmc::Result{EVMC_CONTRACT_VALIDATION_FAILURE};
+    }
 
     auto result = m_vm.execute(*this, m_rev, create_msg, msg.input_data, msg.input_size);
     if (result.status_code != EVMC_SUCCESS)
@@ -220,8 +228,12 @@ evmc::Result Host::create(const evmc_message& msg) noexcept
                                           evmc::Result{EVMC_FAILURE};
     }
 
-    // Reject EF code.
-    if (m_rev >= EVMC_LONDON && !code.empty() && code[0] == 0xEF)
+    if (m_rev >= EVMC_CANCUN && (is_eof_container(initcode) || is_eof_container(code)))
+    {
+        if (validate_eof(m_rev, code) != EOFValidationError::success)
+            return evmc::Result{EVMC_CONTRACT_VALIDATION_FAILURE};
+    }
+    else if (m_rev >= EVMC_LONDON && !code.empty() && code[0] == 0xEF)  // Reject EF code.
         return evmc::Result{EVMC_CONTRACT_VALIDATION_FAILURE};
 
     // TODO: The new_acc pointer is invalid because of the state revert implementation,

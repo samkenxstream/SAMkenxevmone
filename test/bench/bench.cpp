@@ -50,10 +50,7 @@ std::vector<BenchmarkCase::Input> load_inputs(const StateTransitionTest& state_t
     std::vector<BenchmarkCase::Input> inputs;
     inputs.reserve(state_test.multi_tx.inputs.size());
     for (size_t i = 0; i < state_test.multi_tx.inputs.size(); ++i)
-    {
-        inputs.emplace_back(
-            BenchmarkCase::Input{state_test.input_labels.at(i), state_test.multi_tx.inputs[i]});
-    }
+        inputs.emplace_back(state_test.input_labels.at(i), state_test.multi_tx.inputs[i]);
     return inputs;
 }
 
@@ -165,8 +162,8 @@ void register_benchmarks(std::span<const BenchmarkCase> benchmark_cases)
             for (auto& [vm_name, vm] : registered_vms)
             {
                 const auto name = std::string{vm_name} + "/total/" + case_name;
-                RegisterBenchmark(name.c_str(), [&vm = vm, &b, &input](State& state) {
-                    bench_evmc_execute(state, vm, b.code, input.input, input.expected_output);
+                RegisterBenchmark(name.c_str(), [&vm_ = vm, &b, &input](State& state) {
+                    bench_evmc_execute(state, vm_, b.code, input.input, input.expected_output);
                 })->Unit(kMicrosecond);
             }
         }
